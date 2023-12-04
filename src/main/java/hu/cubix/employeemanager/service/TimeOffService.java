@@ -1,7 +1,5 @@
 package hu.cubix.employeemanager.service;
 
-import hu.cubix.employeemanager.dto.EmployeeDto;
-import hu.cubix.employeemanager.dto.PageableTimeOffFilterDto;
 import hu.cubix.employeemanager.dto.TimeOffDto;
 import hu.cubix.employeemanager.dto.TimeOffFilterDto;
 import hu.cubix.employeemanager.exception.EmployeeNotAllowedException;
@@ -14,11 +12,11 @@ import hu.cubix.employeemanager.model.Employee;
 import hu.cubix.employeemanager.model.TimeOff;
 import hu.cubix.employeemanager.model.enums.Status;
 import hu.cubix.employeemanager.repository.TimeOffRepository;
-import org.antlr.v4.runtime.misc.Pair;
-import org.springframework.beans.factory.annotation.Autowired;
+import hu.cubix.employeemanager.security.EmployeeUser;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -32,7 +30,6 @@ public class TimeOffService {
     private final TimeOffMapper timeOffMapper;
     private final EmployeeService employeeService;
 
-    @Autowired
     public TimeOffService(TimeOffRepository timeOffRepository, TimeOffMapper timeOffMapper, EmployeeService employeeService) {
         this.timeOffRepository = timeOffRepository;
         this.timeOffMapper = timeOffMapper;
@@ -49,7 +46,7 @@ public class TimeOffService {
     public TimeOffDto createTimeOff(TimeOffDto timeOffDto) {
         validateDates(timeOffDto.getStartDate(),timeOffDto.getEndDate());
 
-        Employee employee = employeeService.findOrCreateEmployeeByName(timeOffDto.getCreateEmployeeName());
+        Employee employee = findEmployee(getEmployeeUser().getId());
         TimeOff timeOff = new TimeOff(employee, null, timeOffDto.getStartDate(), timeOffDto.getEndDate(), Status.PENDING);
         timeOffRepository.save(timeOff);
         return timeOffMapper.entityToDto(timeOff);
@@ -59,11 +56,11 @@ public class TimeOffService {
     public TimeOffDto modifyTimeOff(long timeOffId, TimeOffDto timeOffDto) {
         validateDates(timeOffDto.getStartDate(), timeOffDto.getEndDate());
 
-        Pair<Employee, TimeOff> pair = findTimeOffByIdAndEmployeeName(timeOffDto.getCreateEmployeeName(), timeOffId);
+        Employee employee = findEmployee(getEmployeeUser().getId());
+        TimeOff timeOff = findTimeOff(timeOffId, employee);
 
-        TimeOff timeOff = pair.b;
         if (isPendig(timeOff)) {
-            timeOff.setModifyEmployee(pair.a);
+            timeOff.setModifyEmployee(employee);
             timeOff.setStartDate(timeOffDto.getStartDate());
             timeOff.setEndDate(timeOffDto.getEndDate());
             TimeOff savedTimeOff = timeOffRepository.save(timeOff);
@@ -74,13 +71,13 @@ public class TimeOffService {
     }
 
     @Transactional
-    public TimeOffDto cancelTimeOff(long timeOffId, EmployeeDto employeeDto) {
-        Pair<Employee, TimeOff> pair = findTimeOffByIdAndEmployeeName(employeeDto.getName(), timeOffId);
+    public TimeOffDto cancelTimeOff(long timeOffId) {
+        Employee employee = findEmployee(getEmployeeUser().getId());
+        TimeOff timeOff = findTimeOff(timeOffId, employee);
 
-        TimeOff timeOff = pair.b;
         if (isPendig(timeOff)) {
             timeOff.setStatus(Status.CANCELED);
-            timeOff.setModifyEmployee(pair.a);
+            timeOff.setModifyEmployee(employee);
             TimeOff savedTimeOff = timeOffRepository.save(timeOff);
             return timeOffMapper.entityToDto(savedTimeOff);
         } else {
@@ -89,18 +86,17 @@ public class TimeOffService {
     }
 
     @Transactional
-    public TimeOffDto approveOrDenyTimeOff(long timeOffId, EmployeeDto employeeDto, Boolean approveOrDeny) {
-        Pair<Employee, TimeOff> pair = findEmployeeAndTimeOff(employeeDto.getName(), timeOffId);
+    public TimeOffDto approveOrDenyTimeOff(long timeOffId, Boolean approveOrDeny) {
+        EmployeeUser employeeUser = getEmployeeUser();
+        TimeOff timeOff = findTimeOff(timeOffId);
 
-        Employee employee = pair.a;
-        TimeOff timeOff = pair.b;
-        if (timeOff.getCreateEmployee().getId() == employee.getId()) {
-            throw new EmployeeNotAllowedException(String.format("%s not allowed to use this function.", employee.getName()));
+        if (timeOff.getCreateEmployee().getManager().getId() != employeeUser.getId()) {
+            throw new EmployeeNotAllowedException(String.format("%s not allowed to use this function.", employeeUser.getName()));
         }
 
         if (isPendig(timeOff)) {
             timeOff.setStatus(approveOrDeny ? Status.APPROVED : Status.DENIED);
-            timeOff.setModifyEmployee(employee);
+            timeOff.setModifyEmployee(findEmployee(employeeUser.getId()));
             TimeOff savedTimeOff = timeOffRepository.save(timeOff);
             return timeOffMapper.entityToDto(savedTimeOff);
         } else {
@@ -114,35 +110,25 @@ public class TimeOffService {
         }
     }
 
-    private Pair<Employee, TimeOff> findEmployeeAndTimeOff(String name, long timeOffId) {
-        Employee employee = employeeService.findEmployeeByName(name);
+    private Employee findEmployee(Long id) {
+        Employee employee = employeeService.findById(id);
         if (employee == null) {
             throw new EmployeeNotFoundException("Employee not found.");
         }
-
-        TimeOff timeOff = timeOffRepository.findById(timeOffId).orElse(null);
-        if (timeOff == null) {
-            throw new TimeOffNotFoundException("TimeOff not found.");
-        }
-
-        return new Pair<>(employee, timeOff);
+        return employee;
     }
 
-    private Pair<Employee, TimeOff> findTimeOffByIdAndEmployeeName(String name, long timeOffId) {
-        Employee employee = employeeService.findEmployeeByName(name);
-        if (employee == null) {
-            throw new EmployeeNotFoundException("Employee not found.");
-        }
-
-        TimeOff timeOff = timeOffRepository.findByIdAndCreateEmployee(timeOffId, employee).orElse(null);
-        if (timeOff == null) {
-            throw new TimeOffNotFoundException("TimeOff not found.");
-        }
-
-        return new Pair<>(employee, timeOff);
+    private TimeOff findTimeOff(Long id) {
+        return timeOffRepository.findById(id)
+                .orElseThrow(() -> new TimeOffNotFoundException("TimeOff not found."));
     }
 
-    public PageableTimeOffFilterDto findByFiltering(TimeOffFilterDto timeOffFilterDto) {
+    private TimeOff findTimeOff(Long id, Employee employee) {
+        return timeOffRepository.findByIdAndCreateEmployee(id, employee)
+                .orElseThrow(() -> new TimeOffNotFoundException("TimeOff not found."));
+    }
+
+    public Page<TimeOff> findByFiltering(TimeOffFilterDto timeOffFilterDto) {
         Specification<TimeOff> specification = Specification.where(null);
 
         String status = timeOffFilterDto.status();
@@ -177,11 +163,14 @@ public class TimeOffService {
             specification = specification.and(TimeOffSpecification.hasDatesIntersect(startDate, endDate));
         }
 
-        Page<TimeOff> page = timeOffRepository.findAll(specification, PageRequest.of(timeOffFilterDto.pageNumber(), timeOffFilterDto.pageSize()));
-        return new PageableTimeOffFilterDto(timeOffMapper.entitiesToDtos(page.getContent()), page.getTotalPages(), page.getTotalElements());
+        return timeOffRepository.findAll(specification, PageRequest.of(timeOffFilterDto.pageNumber(), timeOffFilterDto.pageSize()));
     }
 
     private static boolean isPendig(TimeOff timeOff) {
         return Status.PENDING == timeOff.getStatus();
+    }
+
+    private EmployeeUser getEmployeeUser() {
+        return ((EmployeeUser) SecurityContextHolder.getContext().getAuthentication().getPrincipal());
     }
 }

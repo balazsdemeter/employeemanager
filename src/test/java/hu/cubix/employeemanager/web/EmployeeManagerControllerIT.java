@@ -1,10 +1,12 @@
 package hu.cubix.employeemanager.web;
 
 import hu.cubix.employeemanager.dto.EmployeeDto;
+import hu.cubix.employeemanager.dto.LoginDto;
 import hu.cubix.employeemanager.dto.TimeOffDto;
 import hu.cubix.employeemanager.model.enums.Status;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.http.HttpStatus;
@@ -15,15 +17,16 @@ import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@AutoConfigureTestDatabase
 public class EmployeeManagerControllerIT {
     private static final String BASE_URI = "/api/timeOff";
-
     private final WebTestClient webTestClient;
+    private String employeeToken;
+    private String managerToken;
 
     @Autowired
     public EmployeeManagerControllerIT(WebTestClient webTestClient) {
@@ -31,11 +34,13 @@ public class EmployeeManagerControllerIT {
     }
 
     @Test
-    public void test_create_timeoff_with_new_employee_ok() {
+    public void test_create_timeoff_ok() {
+        employeeToken = login("user1");
+
         List<TimeOffDto> timeOffsBefore = getAllTimeOffs();
 
         LocalDateTime localDateTime = getLocalDateTime();
-        TimeOffDto timeOffDto = new TimeOffDto(UUID.randomUUID().toString(), localDateTime.plusHours(1), localDateTime.plusHours(2));
+        TimeOffDto timeOffDto = new TimeOffDto("employee1", localDateTime.plusHours(1), localDateTime.plusHours(2));
         saveTimeOff(timeOffDto);
 
         List<TimeOffDto> timeOffsAfter = getAllTimeOffs();
@@ -48,18 +53,11 @@ public class EmployeeManagerControllerIT {
     }
 
     @Test
-    public void test_create_timeoff_with_new_employee_nok() {
-        LocalDateTime localDateTime = getLocalDateTime();
-        TimeOffDto timeOffDto = new TimeOffDto("", localDateTime.plusHours(1), localDateTime.plusHours(2));
-        saveTimeOff(timeOffDto)
-                .expectStatus()
-                .isBadRequest();
-    }
-
-    @Test
     public void test_modify_timeoff_ok() {
+        employeeToken = login("user1");
+
         LocalDateTime localDateTime = getLocalDateTime();
-        TimeOffDto timeOffDto = new TimeOffDto(UUID.randomUUID().toString(), localDateTime.plusHours(1), localDateTime.plusHours(2));
+        TimeOffDto timeOffDto = new TimeOffDto("employee1", localDateTime.plusHours(1), localDateTime.plusHours(2));
         TimeOffDto savedTimeOffDto = saveTimeOff(timeOffDto)
                 .expectStatus()
                 .isOk()
@@ -83,8 +81,9 @@ public class EmployeeManagerControllerIT {
 
     @Test
     public void test_modify_timeoff_unauthorized() {
+        employeeToken = login("user1");
         LocalDateTime localDateTime = getLocalDateTime();
-        TimeOffDto timeOffDto = new TimeOffDto(UUID.randomUUID().toString(), localDateTime.plusHours(1), localDateTime.plusHours(2));
+        TimeOffDto timeOffDto = new TimeOffDto("employee1", localDateTime.plusHours(1), localDateTime.plusHours(2));
         TimeOffDto savedTimeOffDto = saveTimeOff(timeOffDto)
                 .expectStatus()
                 .isOk()
@@ -92,15 +91,18 @@ public class EmployeeManagerControllerIT {
                 .returnResult()
                 .getResponseBody();
 
-        modifyTimeOff(savedTimeOffDto.getId(), new TimeOffDto(UUID.randomUUID().toString(), localDateTime.plusHours(1), localDateTime.plusHours(2)))
+        employeeToken = login("user2");
+        modifyTimeOff(savedTimeOffDto.getId(), new TimeOffDto("employee2", localDateTime.plusHours(1), localDateTime.plusHours(2)))
                 .expectStatus()
-                .isUnauthorized();
+                .isForbidden();
     }
 
     @Test
     public void test_cancel_timeoff_ok() {
+        employeeToken = login("user1");
+
         LocalDateTime localDateTime = getLocalDateTime();
-        String employeeName = UUID.randomUUID().toString();
+        String employeeName = "employee1";
         TimeOffDto timeOffDto = new TimeOffDto(employeeName, localDateTime.plusHours(1), localDateTime.plusHours(2));
         TimeOffDto savedTimeOffDto = saveTimeOff(timeOffDto)
                 .expectStatus()
@@ -125,24 +127,11 @@ public class EmployeeManagerControllerIT {
     }
 
     @Test
-    public void test_cancel_timeoff_nok() {
-        LocalDateTime localDateTime = getLocalDateTime();
-        String employeeName = UUID.randomUUID().toString();
-        TimeOffDto timeOffDto = new TimeOffDto(employeeName, localDateTime.plusHours(1), localDateTime.plusHours(2));
-        TimeOffDto savedTimeOffDto = saveTimeOff(timeOffDto)
-                .expectStatus()
-                .isOk()
-                .expectBody(TimeOffDto.class)
-                .returnResult()
-                .getResponseBody();
-
-        cancelTimeOff(savedTimeOffDto.getId(), new EmployeeDto("sdf")).expectStatus().isUnauthorized();
-    }
-
-    @Test
     public void test_approveOrDenyTimeOff_ok() {
+        employeeToken = login("user1");
+
         LocalDateTime localDateTime = getLocalDateTime();
-        String employeeName = UUID.randomUUID().toString();
+        String employeeName = "employee1";
         TimeOffDto timeOffDto = new TimeOffDto(employeeName, localDateTime.plusHours(1), localDateTime.plusHours(2));
         TimeOffDto savedTimeOffDto = saveTimeOff(timeOffDto)
                 .expectStatus()
@@ -152,8 +141,9 @@ public class EmployeeManagerControllerIT {
                 .getResponseBody();
 
         List<TimeOffDto> timeOffsBefore = getAllTimeOffs();
-        String modifyEmployeeName = timeOffsBefore.get(0).getCreateEmployeeName();
-        approveOrDeny(savedTimeOffDto.getId(), new EmployeeDto(modifyEmployeeName))
+
+        managerToken = login("admin");
+        approveOrDeny(savedTimeOffDto.getId(), new EmployeeDto("manager"))
                 .expectStatus()
                 .isOk();
         List<TimeOffDto> timeOffsAfter = getAllTimeOffs();
@@ -164,15 +154,16 @@ public class EmployeeManagerControllerIT {
                 .usingRecursiveComparison()
                 .ignoringFields("id", "createDate", "modifyDate", "status", "modifyEmployeeName")
                 .isEqualTo(savedTimeOffDto);
-        assertThat(actual.getModifyEmployeeName()).isEqualTo(modifyEmployeeName);
+        assertThat(actual.getModifyEmployeeName()).isEqualTo("manager");
         assertThat(actual.getStatus()).isEqualTo(Status.APPROVED.name());
     }
 
     @Test
     public void test_approveOrDenyTimeOff_nok() {
+        employeeToken = login("user1");
+
         LocalDateTime localDateTime = getLocalDateTime();
-        String employeeName = UUID.randomUUID().toString();
-        TimeOffDto timeOffDto = new TimeOffDto(employeeName, localDateTime.plusHours(1), localDateTime.plusHours(2));
+        TimeOffDto timeOffDto = new TimeOffDto("employee1", localDateTime.plusHours(1), localDateTime.plusHours(2));
         TimeOffDto savedTimeOffDto = saveTimeOff(timeOffDto)
                 .expectStatus()
                 .isOk()
@@ -180,9 +171,10 @@ public class EmployeeManagerControllerIT {
                 .returnResult()
                 .getResponseBody();
 
-        approveOrDeny(savedTimeOffDto.getId(), new EmployeeDto(employeeName))
+        employeeToken = login("user2");
+        approveOrDeny(savedTimeOffDto.getId(), new EmployeeDto("employee2"))
                 .expectStatus()
-                .reasonEquals(HttpStatus.METHOD_NOT_ALLOWED.getReasonPhrase());
+                .reasonEquals(HttpStatus.FORBIDDEN.getReasonPhrase());
     }
 
     private ResponseSpec approveOrDeny(long id, EmployeeDto employeeDto) {
@@ -190,6 +182,7 @@ public class EmployeeManagerControllerIT {
         return webTestClient
                 .put()
                 .uri(path)
+                .headers(http -> http.setBearerAuth(managerToken))
                 .bodyValue(employeeDto)
                 .exchange();
     }
@@ -200,6 +193,7 @@ public class EmployeeManagerControllerIT {
         return webTestClient
                 .put()
                 .uri(path)
+                .headers(http -> http.setBearerAuth(employeeToken))
                 .bodyValue(employeeDto)
                 .exchange();
     }
@@ -209,6 +203,7 @@ public class EmployeeManagerControllerIT {
         return webTestClient
                 .put()
                 .uri(path)
+                .headers(http -> http.setBearerAuth(employeeToken))
                 .bodyValue(timeOffDto)
                 .exchange();
     }
@@ -217,14 +212,29 @@ public class EmployeeManagerControllerIT {
         return webTestClient
                 .post()
                 .uri(BASE_URI)
+                .headers(http -> http.setBearerAuth(employeeToken))
                 .bodyValue(timeOffDto)
                 .exchange();
+    }
+
+    private String login(String username) {
+        return webTestClient
+                .post()
+                .uri("/api/login")
+                .bodyValue(new LoginDto(username, "pass"))
+                .exchange()
+                .expectStatus()
+                .isOk()
+                .expectBody(String.class)
+                .returnResult()
+                .getResponseBody();
     }
 
     private List<TimeOffDto> getAllTimeOffs() {
         List<TimeOffDto> timeOffDtos = webTestClient
                 .get()
                 .uri(BASE_URI)
+                .headers(http -> http.setBearerAuth(employeeToken))
                 .exchange()
                 .expectStatus()
                 .isOk()

@@ -1,6 +1,5 @@
 package hu.cubix.employeemanager.controller;
 
-import hu.cubix.employeemanager.dto.EmployeeDto;
 import hu.cubix.employeemanager.dto.PageableTimeOffFilterDto;
 import hu.cubix.employeemanager.dto.TimeOffDto;
 import hu.cubix.employeemanager.dto.TimeOffFilterDto;
@@ -9,9 +8,11 @@ import hu.cubix.employeemanager.exception.EmployeeNotFoundException;
 import hu.cubix.employeemanager.exception.InvalidParameterException;
 import hu.cubix.employeemanager.exception.InvalidStatusException;
 import hu.cubix.employeemanager.exception.TimeOffNotFoundException;
+import hu.cubix.employeemanager.mapper.TimeOffMapper;
+import hu.cubix.employeemanager.model.TimeOff;
 import hu.cubix.employeemanager.service.TimeOffService;
 import jakarta.validation.Valid;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,12 +30,13 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/timeOff")
-public class EmployeeManagerController {
+public class TimeOffController {
     private final TimeOffService timeOffService;
+    private final TimeOffMapper timeOffMapper;
 
-    @Autowired
-    public EmployeeManagerController(TimeOffService timeOffService) {
+    public TimeOffController(TimeOffService timeOffService, TimeOffMapper timeOffMapper) {
         this.timeOffService = timeOffService;
+        this.timeOffMapper = timeOffMapper;
     }
 
     @GetMapping
@@ -65,8 +67,9 @@ public class EmployeeManagerController {
                         pageNumber,
                         pageSize
                 );
-        PageableTimeOffFilterDto pageableTimeOffFilterDto = timeOffService.findByFiltering(timeOffFilterDto);
-        return ResponseEntity.ok(pageableTimeOffFilterDto);
+        Page<TimeOff> page = timeOffService.findByFiltering(timeOffFilterDto);
+        PageableTimeOffFilterDto dto = new PageableTimeOffFilterDto(timeOffMapper.entitiesToDtos(page.getContent()), page.getTotalPages(), page.getTotalElements());
+        return ResponseEntity.ok(dto);
     }
 
     @PostMapping
@@ -75,6 +78,8 @@ public class EmployeeManagerController {
         try {
             savedTimeOffDto = timeOffService.createTimeOff(timeOffDto);
             return ResponseEntity.ok(savedTimeOffDto);
+        } catch (EmployeeNotFoundException e) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
         } catch (InvalidParameterException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
         }
@@ -97,9 +102,9 @@ public class EmployeeManagerController {
     }
 
     @PutMapping("/{id}/cancel")
-    public ResponseEntity<TimeOffDto> cancelTimeOff(@PathVariable long id, @Valid @RequestBody EmployeeDto employeeDto) {
+    public ResponseEntity<TimeOffDto> cancelTimeOff(@PathVariable long id) {
         try {
-            TimeOffDto modifiedTimeOffDto = timeOffService.cancelTimeOff(id, employeeDto);
+            TimeOffDto modifiedTimeOffDto = timeOffService.cancelTimeOff(id);
             return ResponseEntity.ok(modifiedTimeOffDto);
         } catch (EmployeeNotFoundException e) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
@@ -111,10 +116,9 @@ public class EmployeeManagerController {
     }
 
     @PutMapping("/{id}/approveOrDeny")
-    public ResponseEntity<TimeOffDto> approveOrDenyTimeOff(@PathVariable long id, @Valid @RequestBody EmployeeDto employeeDto,
-                                                           @RequestParam(name = "approveOrDeny") Boolean approveOrDeny) {
+    public ResponseEntity<TimeOffDto> approveOrDenyTimeOff(@PathVariable long id, @RequestParam(name = "approveOrDeny") Boolean approveOrDeny) {
         try {
-            TimeOffDto timeOffDto = timeOffService.approveOrDenyTimeOff(id, employeeDto, approveOrDeny);
+            TimeOffDto timeOffDto = timeOffService.approveOrDenyTimeOff(id, approveOrDeny);
             return ResponseEntity.ok(timeOffDto);
         } catch (EmployeeNotFoundException e) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);

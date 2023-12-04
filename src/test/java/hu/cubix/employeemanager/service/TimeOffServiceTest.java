@@ -7,18 +7,21 @@ import hu.cubix.employeemanager.exception.EmployeeNotFoundException;
 import hu.cubix.employeemanager.exception.InvalidParameterException;
 import hu.cubix.employeemanager.exception.InvalidStatusException;
 import hu.cubix.employeemanager.exception.TimeOffNotFoundException;
-import hu.cubix.employeemanager.model.Employee;
 import hu.cubix.employeemanager.model.TimeOff;
 import hu.cubix.employeemanager.model.enums.Status;
 import hu.cubix.employeemanager.repository.EmployeeRepository;
 import hu.cubix.employeemanager.repository.TimeOffRepository;
+import hu.cubix.employeemanager.security.EmployeeUser;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
@@ -27,14 +30,16 @@ import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
 @AutoConfigureTestDatabase
 public class TimeOffServiceTest {
 
+    private final EmployeeService employeeService;
     private final TimeOffService timeOffService;
     private final TimeOffRepository timeOffRepository;
     private final EmployeeRepository employeeRepository;
 
     @Autowired
-    public TimeOffServiceTest(TimeOffService timeOffService,
+    public TimeOffServiceTest(EmployeeService employeeService, TimeOffService timeOffService,
                               TimeOffRepository timeOffRepository,
                               EmployeeRepository employeeRepository) {
+        this.employeeService = employeeService;
         this.timeOffService = timeOffService;
         this.timeOffRepository = timeOffRepository;
         this.employeeRepository = employeeRepository;
@@ -48,7 +53,12 @@ public class TimeOffServiceTest {
 
     @Test
     public void testCreateTimeOffWithNewEmployee() {
-        TimeOffDto timeOffDto = createTimeOffDto("create timeoff");
+        String name = "create timeoff";
+
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto(name));
+        setAuthentication(employee);
+
+        TimeOffDto timeOffDto = createTimeOffDto();
 
         TimeOffDto savedTimeOffDto = timeOffService.createTimeOff(timeOffDto);
 
@@ -65,17 +75,22 @@ public class TimeOffServiceTest {
 
     @Test
     public void testCreateTimeOffInvalidParameter() {
-        TimeOffDto timeOffDto = createTimeOffDto("create timeoff");
+        String name = "create timeoff";
+        employeeService.createEmployee(new EmployeeDto(name));
+
+        TimeOffDto timeOffDto = createTimeOffDto();
         timeOffDto.setStartDate(getLocalDateTime().plusHours(12));
 
-        assertThatThrownBy(() -> {
-            timeOffService.createTimeOff(timeOffDto);
-        }).isInstanceOf(InvalidParameterException.class);
+        assertThatThrownBy(() -> timeOffService.createTimeOff(timeOffDto)).isInstanceOf(InvalidParameterException.class);
     }
 
     @Test
     public void testModifyTimeOff() {
-        TimeOffDto timeOffDto = createTimeOffDto("modify timeoff");
+        String name = "modify timeoff";
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto(name));
+        setAuthentication(employee);
+
+        TimeOffDto timeOffDto = createTimeOffDto();
 
         TimeOffDto savedTimeOffDto = timeOffService.createTimeOff(timeOffDto);
 
@@ -86,9 +101,9 @@ public class TimeOffServiceTest {
 
         TimeOff searchedTimeOff = timeOffRepository.findById(savedTimeOffDto.getId()).orElse(null);
         assertThat(searchedTimeOff).isNotNull();
-        assertThat(searchedTimeOff.getCreateEmployee().getName()).isEqualTo(timeOffDto.getCreateEmployeeName());
+        assertThat(searchedTimeOff.getCreateEmployee().getName()).isEqualTo(name);
         assertThat(searchedTimeOff.getCreateDate()).isNotNull();
-        assertThat(searchedTimeOff.getModifyEmployee().getName()).isEqualTo(timeOffDto.getCreateEmployeeName());
+        assertThat(searchedTimeOff.getModifyEmployee().getName()).isEqualTo(name);
         assertThat(searchedTimeOff.getModifyEmployee()).isNotNull();
         assertThat(searchedTimeOff.getStartDate()).isEqualTo(timeOffDto.getStartDate());
         assertThat(searchedTimeOff.getEndDate()).isEqualTo(timeOffDto.getEndDate());
@@ -97,41 +112,66 @@ public class TimeOffServiceTest {
 
     @Test
     public void testModifyTimeOffEmployeeNotFound() {
-        TimeOffDto timeOffDto = createTimeOffDto("modify timeoff");
+        String name = "modify timeoff";
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto(name));
+        setAuthentication(employee);
+
+        TimeOffDto timeOffDto = createTimeOffDto();
 
         TimeOffDto savedTimeOffDto = timeOffService.createTimeOff(timeOffDto);
-        timeOffDto.setCreateEmployeeName("sserf sdfsdf");
 
         assertThatThrownBy(() -> {
+            employee.setId(0L);
+            setAuthentication(employee);
             timeOffService.modifyTimeOff(savedTimeOffDto.getId(), timeOffDto);
         }).isInstanceOf(EmployeeNotFoundException.class);
     }
 
     @Test
-    public void testModifyTimeOffTimeOffNotFound() {
-        TimeOffDto timeOffDto = createTimeOffDto("modify timeoff");
+    public void testModifyTimeOffTimeOffNotFound_timeOff() {
+        String name = "modify timeoff";
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto(name));
+        setAuthentication(employee);
+
+        TimeOffDto timeOffDto = createTimeOffDto();
 
         timeOffService.createTimeOff(timeOffDto);
 
-        assertThatThrownBy(() -> {
-            timeOffService.modifyTimeOff(0, timeOffDto);
-        }).isInstanceOf(TimeOffNotFoundException.class);
+        assertThatThrownBy(() -> timeOffService.modifyTimeOff(0, timeOffDto)).isInstanceOf(TimeOffNotFoundException.class);
+    }
+
+    @Test
+    public void testModifyTimeOffTimeOffNotFound_employee() {
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto("modify timeoff"));
+        setAuthentication(employee);
+
+        TimeOffDto timeOffDto = createTimeOffDto();
+
+        TimeOffDto timeOff = timeOffService.createTimeOff(timeOffDto);
+
+        EmployeeDto employeeNotAllowed = employeeService.createEmployee(new EmployeeDto("sdf sdf"));
+        setAuthentication(employeeNotAllowed);
+
+        assertThatThrownBy(() -> timeOffService.modifyTimeOff(timeOff.getId(), timeOffDto)).isInstanceOf(TimeOffNotFoundException.class);
     }
 
     @Test
     public void testCancelTimeOff() {
-        TimeOffDto timeOffDto = createTimeOffDto("cancel timeoff");
+        String name = "cancel timeoff";
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto(name));
+        setAuthentication(employee);
+
+        TimeOffDto timeOffDto = createTimeOffDto();
 
         TimeOffDto savedTimeOffDto = timeOffService.createTimeOff(timeOffDto);
 
-        EmployeeDto employeeDto = new EmployeeDto(timeOffDto.getCreateEmployeeName());
-        timeOffService.cancelTimeOff(savedTimeOffDto.getId(), employeeDto);
+        timeOffService.cancelTimeOff(savedTimeOffDto.getId());
 
         TimeOff searchedTimeOff = timeOffRepository.findById(savedTimeOffDto.getId()).orElse(null);
         assertThat(searchedTimeOff).isNotNull();
-        assertThat(searchedTimeOff.getCreateEmployee().getName()).isEqualTo(employeeDto.getName());
+        assertThat(searchedTimeOff.getCreateEmployee().getName()).isEqualTo(name);
         assertThat(searchedTimeOff.getCreateDate()).isNotNull();
-        assertThat(searchedTimeOff.getModifyEmployee().getName()).isEqualTo(employeeDto.getName());
+        assertThat(searchedTimeOff.getModifyEmployee().getName()).isEqualTo(name);
         assertThat(searchedTimeOff.getModifyEmployee()).isNotNull();
         assertThat(searchedTimeOff.getStartDate()).isEqualTo(timeOffDto.getStartDate());
         assertThat(searchedTimeOff.getEndDate()).isEqualTo(timeOffDto.getEndDate());
@@ -140,21 +180,25 @@ public class TimeOffServiceTest {
 
     @Test
     public void testApproveOrDenyTimeOffApproved() {
-        TimeOffDto timeOffDto = createTimeOffDto("aod timeoff");
+        EmployeeDto manager = employeeService.createEmployee(new EmployeeDto("test manager"));
+
+        String name = "aod timeoff";
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto(name), manager.getId());
+        setAuthentication(employee);
+
+        TimeOffDto timeOffDto = createTimeOffDto();
 
         TimeOffDto savedTimeOffDto = timeOffService.createTimeOff(timeOffDto);
 
-        Employee managerEmployee = new Employee("test manager");
-        employeeRepository.save(managerEmployee);
-
-        timeOffService.approveOrDenyTimeOff(savedTimeOffDto.getId(), new EmployeeDto(managerEmployee.getName()), true);
+        setAuthentication(manager);
+        timeOffService.approveOrDenyTimeOff(savedTimeOffDto.getId(), true);
 
         TimeOff searchedTimeOff = timeOffRepository.findById(savedTimeOffDto.getId()).orElse(null);
 
         assertThat(searchedTimeOff).isNotNull();
         assertThat(searchedTimeOff.getCreateEmployee().getName()).isEqualTo(savedTimeOffDto.getCreateEmployeeName());
         assertThat(searchedTimeOff.getCreateDate()).isNotNull();
-        assertThat(searchedTimeOff.getModifyEmployee().getName()).isEqualTo(managerEmployee.getName());
+        assertThat(searchedTimeOff.getModifyEmployee().getName()).isEqualTo(manager.getName());
         assertThat(searchedTimeOff.getModifyEmployee()).isNotNull();
         assertThat(searchedTimeOff.getStartDate()).isEqualTo(timeOffDto.getStartDate());
         assertThat(searchedTimeOff.getEndDate()).isEqualTo(timeOffDto.getEndDate());
@@ -163,21 +207,25 @@ public class TimeOffServiceTest {
 
     @Test
     public void testApproveOrDenyTimeOffDenied() {
-        TimeOffDto timeOffDto = createTimeOffDto("aod timeoff");
+        EmployeeDto manager = employeeService.createEmployee(new EmployeeDto("test manager"));
+
+        String name = "aod timeoff";
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto(name), manager.getId());
+        setAuthentication(employee);
+
+        TimeOffDto timeOffDto = createTimeOffDto();
 
         TimeOffDto savedTimeOffDto = timeOffService.createTimeOff(timeOffDto);
 
-        Employee managerEmployee = new Employee("test manager");
-        employeeRepository.save(managerEmployee);
-
-        timeOffService.approveOrDenyTimeOff(savedTimeOffDto.getId(), new EmployeeDto(managerEmployee.getName()), false);
+        setAuthentication(manager);
+        timeOffService.approveOrDenyTimeOff(savedTimeOffDto.getId(), false);
 
         TimeOff searchedTimeOff = timeOffRepository.findById(savedTimeOffDto.getId()).orElse(null);
 
         assertThat(searchedTimeOff).isNotNull();
         assertThat(searchedTimeOff.getCreateEmployee().getName()).isEqualTo(savedTimeOffDto.getCreateEmployeeName());
         assertThat(searchedTimeOff.getCreateDate()).isNotNull();
-        assertThat(searchedTimeOff.getModifyEmployee().getName()).isEqualTo(managerEmployee.getName());
+        assertThat(searchedTimeOff.getModifyEmployee().getName()).isEqualTo(manager.getName());
         assertThat(searchedTimeOff.getModifyEmployee()).isNotNull();
         assertThat(searchedTimeOff.getStartDate()).isEqualTo(timeOffDto.getStartDate());
         assertThat(searchedTimeOff.getEndDate()).isEqualTo(timeOffDto.getEndDate());
@@ -186,38 +234,50 @@ public class TimeOffServiceTest {
 
     @Test
     public void testApproveOrDenyTimeOffEmployeeNotAllowed() {
-        TimeOffDto timeOffDto = createTimeOffDto("aod timeoff");
+        EmployeeDto manager = employeeService.createEmployee(new EmployeeDto("test manager"));
+
+        String name = "aod timeoff";
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto(name), manager.getId());
+        setAuthentication(employee);
+
+        TimeOffDto timeOffDto = createTimeOffDto();
 
         TimeOffDto savedTimeOffDto = timeOffService.createTimeOff(timeOffDto);
 
-        assertThatThrownBy(() -> {
-            timeOffService.approveOrDenyTimeOff(savedTimeOffDto.getId(), new EmployeeDto(timeOffDto.getCreateEmployeeName()), true);
-        }).isInstanceOf(EmployeeNotAllowedException.class);
+        assertThatThrownBy(() -> timeOffService.approveOrDenyTimeOff(savedTimeOffDto.getId(), true)).isInstanceOf(EmployeeNotAllowedException.class);
     }
 
     @Test
     public void testApproveOrDenyTimeOffInvalidStatusException() {
-        TimeOffDto timeOffDto = createTimeOffDto("aod timeoff");
+        EmployeeDto manager = employeeService.createEmployee(new EmployeeDto("test manager"));
 
+        String name = "aod timeoff";
+        EmployeeDto employee = employeeService.createEmployee(new EmployeeDto(name), manager.getId());
+
+        TimeOffDto timeOffDto = createTimeOffDto();
+
+        setAuthentication(employee);
         TimeOffDto savedTimeOffDto = timeOffService.createTimeOff(timeOffDto);
         Long id = savedTimeOffDto.getId();
-        String createEmployeeName = timeOffDto.getCreateEmployeeName();
-        timeOffService.cancelTimeOff(id, new EmployeeDto(createEmployeeName));
+        timeOffService.cancelTimeOff(id);
 
-        Employee managerEmployee = new Employee("test manager");
-        employeeRepository.save(managerEmployee);
+        setAuthentication(manager);
 
-        assertThatThrownBy(() -> {
-            timeOffService.approveOrDenyTimeOff(id, new EmployeeDto(managerEmployee.getName()), true);
-        }).isInstanceOf(InvalidStatusException.class);
+        assertThatThrownBy(() -> timeOffService.approveOrDenyTimeOff(id, true)).isInstanceOf(InvalidStatusException.class);
     }
 
-    private TimeOffDto createTimeOffDto(String employeeName) {
+    private TimeOffDto createTimeOffDto() {
         LocalDateTime localDateTime = getLocalDateTime();
-        return new TimeOffDto(employeeName, localDateTime.plusHours(1), localDateTime.plusHours(2));
+        return new TimeOffDto(null, localDateTime.plusHours(1), localDateTime.plusHours(2));
     }
 
     private LocalDateTime getLocalDateTime() {
         return LocalDateTime.of(2023, 11, 16, 12, 0, 0);
+    }
+
+    private static void setAuthentication(EmployeeDto employee) {
+        EmployeeUser employeeUser = new EmployeeUser("user", "password", Collections.emptyList(), employee.getId(), null, null, null, null);
+        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(employeeUser, null, null);
+        SecurityContextHolder.getContext().setAuthentication(authentication);
     }
 }

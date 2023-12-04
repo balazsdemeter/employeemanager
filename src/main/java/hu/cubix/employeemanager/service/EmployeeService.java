@@ -1,33 +1,41 @@
 package hu.cubix.employeemanager.service;
 
+import hu.cubix.employeemanager.dto.EmployeeDto;
+import hu.cubix.employeemanager.exception.EmployeeNotFoundException;
+import hu.cubix.employeemanager.mapper.EmployeeMapper;
 import hu.cubix.employeemanager.model.Employee;
 import hu.cubix.employeemanager.repository.EmployeeRepository;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class EmployeeService {
     private final EmployeeRepository employeeRepository;
+    private final EmployeeMapper employeeMapper;
 
-    @Autowired
-    public EmployeeService(EmployeeRepository employeeRepository) {
+    public EmployeeService(EmployeeRepository employeeRepository,
+                           EmployeeMapper employeeMapper) {
         this.employeeRepository = employeeRepository;
+        this.employeeMapper = employeeMapper;
     }
 
     @Transactional
-    public Employee findOrCreateEmployeeByName(String name) {
-        Employee employee = findEmployeeByName(name);
-        if (employee != null) {
-            return employee;
+    public EmployeeDto createEmployee(EmployeeDto employeeDto) {
+        Employee employee = employeeMapper.dtoToEmployee(employeeDto);
+        return employeeMapper.employeeToDto(employeeRepository.save(employee));
+    }
+
+    @Transactional
+    public EmployeeDto createEmployee(EmployeeDto employeeDto, Long managerId) {
+        Employee employee = employeeMapper.dtoToEmployee(employeeDto);
+
+        if (managerId != null) {
+            employeeRepository.findById(managerId).ifPresent(employee::setManager);
         }
-
-        employee = new Employee(name);
-        return employeeRepository.save(employee);
+        return employeeMapper.employeeToDto(employeeRepository.save(employee));
     }
 
-    @Transactional
-    public Employee findEmployeeByName(String name) {
-        return employeeRepository.findEmployeeByName(name).orElse(null);
+    public Employee findById(Long id) {
+        return employeeRepository.findById(id).orElseThrow(EmployeeNotFoundException::new);
     }
 }
